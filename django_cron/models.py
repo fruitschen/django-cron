@@ -25,11 +25,14 @@ from datetime import datetime
 
 class Job(models.Model):
     name = models.CharField(max_length=100)
-    
+
     # time between job runs (in minutes) // default: 1 day
     run_frequency = models.PositiveIntegerField(default=1440)
     last_run = models.DateTimeField(default=datetime.now())
-    
+
+    fails = models.PositiveSmallIntegerField(default=0)
+    max_fails = models.PositiveSmallIntegerField(default=0)
+
     instance = models.TextField()
     args = models.TextField()
     kwargs = models.TextField()

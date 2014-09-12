@@ -54,10 +54,10 @@ cron_pid_file = cron_settings.PID_FILE
 class Job(object):
     run_every = DAY
 
-    def run(self, *args, **kwargs):  
+    def run(self, *args, **kwargs):
         self.job()
         cron_done.send(sender=self, *args, **kwargs)
-        
+
     def job(self):
         """
         Should be overridden (this way is cleaner, but the old way - overriding run() - will still work)
@@ -69,9 +69,9 @@ class CronScheduler(object):
         """
         Register the given Job with the scheduler class
         """
-        
+
         job_instance = job_class()
-        
+
         if not isinstance(job_instance, Job):
             raise TypeError("You can only register a Job not a %r" % job_class)
 
@@ -81,6 +81,7 @@ class CronScheduler(object):
         job.args = cPickle.dumps(args)
         job.kwargs = cPickle.dumps(kwargs)
         job.run_frequency = job_instance.run_every
+        job.max_fails = job_instance.max_fails
         job.save()
 
 
@@ -168,12 +169,12 @@ class CronScheduler(object):
             jobs = models.Job.objects.all()
             for job in jobs:
                 if job.queued:
-                    
+
                     # Discard the seconds to prevent drift. Thanks to Josh Cartmell
                     now = datetime.now()
                     now = datetime(now.year, now.month, now.day, now.hour, now.minute)
                     last_run = datetime(job.last_run.year, job.last_run.month, job.last_run.day, job.last_run.hour, job.last_run.minute)
-                    
+
                     if (now - last_run) >= timedelta(minutes=job.run_frequency):
                         try:
                             try:
@@ -183,31 +184,47 @@ class CronScheduler(object):
                             except:
                                 job.delete()
                                 raise
-                            
+
                             inst.run(*args, **kwargs)
                             job.last_run = datetime.now()
                             job.save()
 
                         except Exception, err:
-                            # if the job throws an error, just remove it from
-                            # the queue. That way we can find/fix the error and
-                            # requeue the job manually
+                            # if the job throws an error, retry for max_fails
+                            # times, then remove it from the queue.
                             try:
                                 for u in User.objects.filter(is_staff=True):
                                     u.message_set.create(message="Error running job: %s: %s Please notify the administrator." % (job.name, err))
                             except:
                                 #Code will fail in django 1.4 or later as user.message_set is no longer available
                                 pass
-                            if job.id:#job might have been deleted. 
-                                job.queued = False
-                                job.save()
+
+
                             import traceback
                             exc_info = sys.exc_info()
                             stack = ''.join(traceback.format_tb(exc_info[2]))
-                            if not settings.LOCAL_DEV:
-                                self.mail_exception(job.name, inst.__module__, err, stack)
+
+                            if job.id:#job might have been deleted.
+                                if job.fails < job.max_fails:
+                                    job.fails += 1
+                                    job.save()
+                                else:
+                                    job.fails = 0
+                                    job.queued = False
+                                    job.save()
+
+                                if not settings.LOCAL_DEV:
+                                    if job.fails:
+                                        self.mail_exception(job.name + ', Retries left: ' + str(job.max_fails - job.fails), inst.__module__, err, stack)
+                                    else:
+                                        self.mail_exception(job.name, inst.__module__, err, stack)
+                                else:
+                                    print stack
                             else:
-                                print stack
+                                if not settings.LOCAL_DEV:
+                                    self.mail_exception(job.name, inst.__module__, err, stack)
+                                else:
+                                    print stack
             status.executing = False
             status.save()
 
@@ -224,10 +241,10 @@ class CronScheduler(object):
         Module: %s
         Error message: %s
         Time: %s
-        
+
         Stack Trace: %s
         ''' % (settings.SITE_NAME, job, module, str(err), datetime.now().strftime("%d %b %Y"), ''.join(stack))
-        
+
         mail_admins(subject, body, fail_silently=True)
 
 
