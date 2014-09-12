@@ -81,7 +81,10 @@ class CronScheduler(object):
         job.args = cPickle.dumps(args)
         job.kwargs = cPickle.dumps(kwargs)
         job.run_frequency = job_instance.run_every
-        job.max_fails = job_instance.max_fails
+        try:
+            job.max_fails = job_instance.max_fails
+        except AttributeError:
+            pass
         job.save()
 
 
@@ -187,6 +190,7 @@ class CronScheduler(object):
 
                             inst.run(*args, **kwargs)
                             job.last_run = datetime.now()
+                            job.fails = 0
                             job.save()
 
                         except Exception, err:
